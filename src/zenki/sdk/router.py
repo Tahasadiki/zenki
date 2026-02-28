@@ -3,13 +3,14 @@
 Classifies user messages by complexity and selects an appropriate model
 shortname so that simple interactions use a cheaper/faster model while
 complex reasoning tasks are routed to a more capable one.
+
+The SDK accepts shortnames ("haiku", "sonnet", "opus") directly, so this
+module returns those strings without resolving to full model IDs.
 """
 
 from __future__ import annotations
 
 import re
-
-from zenki.llm.config import get_model_id
 
 # -------------------------------------------------------------------------
 # Pattern definitions
@@ -110,29 +111,3 @@ class ModelRouter:
 
         # Default to sonnet for everything else.
         return "sonnet"
-
-    def route(
-        self,
-        message: str,
-        context: dict | None = None,
-    ) -> str:
-        """Return the full model ID for the given message.
-
-        This is a convenience wrapper that classifies the message and then
-        resolves the shortname to a full model identifier via
-        :func:`~zenki.llm.config.get_model_id`.
-
-        Parameters
-        ----------
-        message:
-            The user's message text.
-        context:
-            Optional contextual hints.
-
-        Returns
-        -------
-        str
-            A full Anthropic model identifier (e.g. ``"claude-sonnet-4-6"``).
-        """
-        shortname = self.classify_complexity(message, context=context)
-        return get_model_id(shortname)

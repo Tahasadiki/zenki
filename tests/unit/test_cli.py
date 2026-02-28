@@ -57,7 +57,6 @@ class TestHelp:
         assert "status" in result.output
         assert "config" in result.output
         assert "memory" in result.output
-        assert "skills" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -199,63 +198,6 @@ class TestStatus:
         result = runner.invoke(app, ["status"])
         assert result.exit_code == 0
         assert "No" in result.output
-
-
-# ---------------------------------------------------------------------------
-# zenki skills list
-# ---------------------------------------------------------------------------
-
-
-class TestSkills:
-    """Tests for skill commands."""
-
-    def test_skills_list_empty(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Skills list with no skills should indicate none registered."""
-        config_dir = tmp_path / "zenki_config"
-        config_dir.mkdir(parents=True)
-
-        # Create an empty database.
-        db_path = config_dir / "zenki.db"
-        db = ZenkiDatabase(db_path)
-        db.initialize()
-        db.close()
-
-        monkeypatch.setattr(ZenkiSettings, "get_config_dir", lambda: config_dir)
-
-        result = runner.invoke(app, ["skills", "list"])
-        assert result.exit_code == 0
-        assert "No skills" in result.output
-
-    def test_skills_list_with_skills(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Skills list should display registered skills."""
-        from zenki.db.models import Skill
-
-        config_dir = tmp_path / "zenki_config"
-        config_dir.mkdir(parents=True)
-
-        db_path = config_dir / "zenki.db"
-        db = ZenkiDatabase(db_path)
-        db.initialize()
-        db.create_skill(
-            Skill(
-                name="test-skill",
-                skill_type="core",
-                status="approved",
-                path="/skills/test.md",
-                description="A test skill",
-            )
-        )
-        db.close()
-
-        monkeypatch.setattr(ZenkiSettings, "get_config_dir", lambda: config_dir)
-
-        result = runner.invoke(app, ["skills", "list"])
-        assert result.exit_code == 0
-        assert "test-skill" in result.output
 
 
 # ---------------------------------------------------------------------------

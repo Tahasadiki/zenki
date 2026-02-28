@@ -35,7 +35,6 @@ class LLMConfig(BaseModel):
     provider: str = "claude"
     api_key_env: str = "ANTHROPIC_API_KEY"
     default_model: str = "sonnet"
-    smart_routing: bool = True
     models: LLMModelsConfig = Field(default_factory=LLMModelsConfig)
 
     @field_validator("default_model")
@@ -121,13 +120,6 @@ class DaemonConfig(BaseModel):
         return upper
 
 
-class SkillsConfig(BaseModel):
-    """Skills system configuration."""
-
-    auto_discover: bool = True
-    require_approval: bool = True
-
-
 class PersonalityConfig(BaseModel):
     """Personality and interaction style configuration."""
 
@@ -173,7 +165,6 @@ class ZenkiSettings(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
-    skills: SkillsConfig = Field(default_factory=SkillsConfig)
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
 
     @staticmethod

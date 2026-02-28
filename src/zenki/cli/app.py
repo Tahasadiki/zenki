@@ -40,7 +40,6 @@ from zenki.cli.commands.chat import chat  # noqa: E402
 from zenki.cli.commands.config_cmd import config_app  # noqa: E402
 from zenki.cli.commands.memory_cmd import memory_app  # noqa: E402
 from zenki.cli.commands.setup import setup  # noqa: E402
-from zenki.cli.commands.skills_cmd import skills_app  # noqa: E402
 from zenki.cli.commands.status import status  # noqa: E402
 
 app.command()(setup)
@@ -48,4 +47,3 @@ app.command()(chat)
 app.command()(status)
 app.add_typer(config_app, name="config", help="Manage configuration.")
 app.add_typer(memory_app, name="memory", help="Memory management.")
-app.add_typer(skills_app, name="skills", help="Skill management.")

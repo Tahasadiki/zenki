@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from zenki.sdk._context import clear_all
 from zenki.sdk.tools import (
     ZENKI_TOOL_NAMES,
     create_zenki_tools,
@@ -20,8 +21,6 @@ from zenki.sdk.tools import (
     schedule_task,
     send_notification,
 )
-from zenki.sdk._context import clear_all
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

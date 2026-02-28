@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -29,13 +31,28 @@ def _handle_special(command: str) -> bool:
     return False
 
 
-def _generate_response(user_input: str) -> str:
-    """Generate a response to the user's input.
+def _init_orchestrator():
+    """Initialise the Zenki orchestrator stack."""
+    from zenki.config.settings import ZenkiSettings
+    from zenki.db.database import ZenkiDatabase
+    from zenki.memory.manager import MemoryManager
+    from zenki.sdk.orchestrator import ZenkiOrchestrator
 
-    This is a placeholder that echoes the input. When the real agent is
-    ready, replace this function with an actual LLM call.
-    """
-    return f"You said: {user_input}\n\n*(Agent not connected -- echo mode)*"
+    settings = ZenkiSettings.load()
+    config_dir = settings.ensure_config_dir()
+
+    db_path = config_dir / "zenki.db"
+    db = ZenkiDatabase(db_path)
+    db.initialize()
+
+    memory_manager = MemoryManager(settings=settings, db=db, config_dir=config_dir)
+
+    orchestrator = ZenkiOrchestrator(
+        settings=settings,
+        db=db,
+        memory_manager=memory_manager,
+    )
+    return orchestrator, settings
 
 
 def chat(
@@ -53,6 +70,14 @@ def chat(
         )
     )
 
+    try:
+        orchestrator, settings = _init_orchestrator()
+    except Exception as exc:
+        console.print(f"[red]Failed to initialise Zenki: {exc}[/red]")
+        console.print("[dim]Run 'zenki setup' first if this is a new installation.[/dim]")
+        raise typer.Exit(code=1)
+
+    session_id = resume
     if resume:
         console.print(f"[dim]Resuming session: {resume}[/dim]")
 
@@ -73,8 +98,20 @@ def chat(
                 break
             continue
 
-        # Generate and display response.
-        response = _generate_response(user_input)
+        # Send to the SDK orchestrator.
+        try:
+            response = asyncio.run(
+                orchestrator.process_message(
+                    message=user_input,
+                    session_id=session_id,
+                    user_id=settings.user.id,
+                    channel_type="cli",
+                )
+            )
+        except Exception as exc:
+            console.print(f"\n[red]Error: {exc}[/red]\n")
+            continue
+
         console.print()
         console.print(
             Panel(

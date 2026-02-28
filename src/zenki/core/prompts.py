@@ -12,8 +12,6 @@ conversation with your user.
 
 {retrieved_memory_block}
 
-{skills_block}
-
 ## Guidelines
 - Be {tone} in your communication style
 - Verbosity level: {verbosity}
@@ -50,11 +48,6 @@ RETRIEVED_MEMORY_TEMPLATE = """\
 {episodic_memories}
 
 {semantic_memories}
-"""
-
-SKILLS_TEMPLATE = """\
-## Available Skills
-{skill_descriptions}
 """
 
 CONSOLIDATION_PROMPT = """\
@@ -129,32 +122,11 @@ Respond with a JSON array of facts:
 If no facts to extract, respond with an empty array: []
 """
 
-SKILL_GENERATION_PROMPT = """\
-Generate a Claude-style skill based on this pattern:
-
-Pattern: {pattern_description}
-User context: {user_context}
-
-Generate a SKILL.md file following this format:
-
-```yaml
----
-name: skill-name-here
-description: What this skill does
-allowed-tools: Read, Write, Bash
----
-```
-
-Then include markdown instructions for how to execute this skill.
-Include step-by-step instructions, any templates needed, and important notes.
-"""
-
 
 def build_system_prompt(
     personality: dict[str, str],
     core_memory: dict[str, str] | None = None,
     retrieved_memories: dict[str, str] | None = None,
-    skill_descriptions: str = "",
 ) -> str:
     """Build the full system prompt from components."""
     personality_block = PERSONALITY_TEMPLATE.format(
@@ -181,15 +153,10 @@ def build_system_prompt(
             semantic_memories=retrieved_memories.get("semantic", ""),
         )
 
-    skills_block = ""
-    if skill_descriptions:
-        skills_block = SKILLS_TEMPLATE.format(skill_descriptions=skill_descriptions)
-
     return SYSTEM_PROMPT_TEMPLATE.format(
         personality_block=personality_block,
         core_memory_block=core_memory_block,
         retrieved_memory_block=retrieved_memory_block,
-        skills_block=skills_block,
         tone=personality.get("tone", "professional"),
         verbosity=personality.get("verbosity", "balanced"),
         proactivity=personality.get("proactivity", "moderate"),

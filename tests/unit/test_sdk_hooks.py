@@ -13,11 +13,8 @@ from zenki.sdk.hooks import (
     block_dangerous_paths,
     check_dangerous_commands,
     create_zenki_hooks,
-    forward_notifications,
     protect_sensitive_files,
-    track_subagent_lifecycle,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

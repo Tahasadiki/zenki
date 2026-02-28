@@ -5,7 +5,6 @@ from zenki.core.prompts import (
     FACT_EXTRACTION_PROMPT,
     PERSONALITY_TEMPLATE,
     SESSION_SUMMARY_PROMPT,
-    SKILL_GENERATION_PROMPT,
     SYSTEM_PROMPT_TEMPLATE,
     build_system_prompt,
 )
@@ -62,15 +61,6 @@ class TestBuildSystemPrompt:
         assert "API refactor" in prompt
         assert "REST over GraphQL" in prompt
 
-    def test_with_skills(self):
-        personality = {"tone": "professional"}
-        prompt = build_system_prompt(
-            personality=personality,
-            skill_descriptions="- deploy: Deploy to production\n- review: Code review",
-        )
-        assert "deploy" in prompt
-        assert "Code review" in prompt
-
     def test_defaults_when_missing_keys(self):
         prompt = build_system_prompt(personality={})
         assert "professional" in prompt  # default tone
@@ -84,9 +74,6 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(personality={"tone": "casual"})
         assert "Relevant Context" not in prompt
 
-    def test_empty_skills_omitted(self):
-        prompt = build_system_prompt(personality={"tone": "casual"})
-        assert "Available Skills" not in prompt
 
 
 class TestPromptTemplates:
@@ -100,10 +87,6 @@ class TestPromptTemplates:
     def test_fact_extraction_prompt_has_placeholders(self):
         assert "{message}" in FACT_EXTRACTION_PROMPT
         assert "{context}" in FACT_EXTRACTION_PROMPT
-
-    def test_skill_generation_prompt_has_placeholders(self):
-        assert "{pattern_description}" in SKILL_GENERATION_PROMPT
-        assert "{user_context}" in SKILL_GENERATION_PROMPT
 
     def test_personality_template_format(self):
         result = PERSONALITY_TEMPLATE.format(
