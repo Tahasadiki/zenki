@@ -1,23 +1,26 @@
 """Main Zenki orchestrator using the Claude Agent SDK.
 
-The ``ZenkiOrchestrator`` replaces the previous custom agent loop with the
-SDK's native ``ClaudeSDKClient``.  It wires together:
+The ``ZenkiOrchestrator`` is the single entry-point for all Zenki operations.
+It wires together:
 
 - **Agents**: Specialized subagents (software engineer, web researcher, etc.)
 - **Tools**: Custom MCP tools (memory, scheduling, notifications)
 - **Hooks**: Security, audit, and memory integration hooks
 - **Skills**: Filesystem-based skills loaded via ``setting_sources``
 - **Sessions**: Multi-turn conversations with full context retention
+- **Session management**: Create/resume sessions and persist messages
+- **Model routing**: Dynamic per-query model selection based on complexity
+- **Error handling**: Smart retry/escalation for transient failures
 
 Reference: docs/claude-agent-sdk/python-reference.md
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -30,11 +33,14 @@ from claude_agent_sdk import (
 )
 
 from zenki.config.settings import ZenkiSettings
+from zenki.core.errors import SmartErrorHandler
 from zenki.core.prompts import build_system_prompt
+from zenki.core.session import SessionManager
 from zenki.db.database import ZenkiDatabase
 from zenki.sdk import _context
-from zenki.sdk.agents import ZENKI_AGENTS, get_agents
+from zenki.sdk.agents import get_agents
 from zenki.sdk.hooks import create_zenki_hooks
+from zenki.sdk.router import ModelRouter
 from zenki.sdk.tools import ZENKI_TOOL_NAMES, create_zenki_tools
 
 logger = logging.getLogger(__name__)
@@ -44,7 +50,8 @@ class ZenkiOrchestrator:
     """SDK-native orchestrator for Zenki.
 
     Uses ``ClaudeSDKClient`` for multi-turn conversations with subagent
-    delegation, custom tools, and lifecycle hooks.
+    delegation, custom tools, and lifecycle hooks.  Also manages sessions,
+    persists messages, and routes queries to the right model.
 
     Parameters
     ----------
@@ -70,6 +77,11 @@ class ZenkiOrchestrator:
     ) -> None:
         self.settings = settings
         self.db = db
+
+        # Session management and error handling
+        self.session_manager = SessionManager(db)
+        self.error_handler = SmartErrorHandler()
+        self._router = ModelRouter()
 
         # Register services so custom tools can access them
         _context.set_database(db)
@@ -120,6 +132,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         cwd: str | Path | None = None,
         extra_agents: dict[str, AgentDefinition] | None = None,
         permission_mode: str = "acceptEdits",
+        model_override: str | None = None,
     ) -> ClaudeAgentOptions:
         """Build ``ClaudeAgentOptions`` with all Zenki components wired in.
 
@@ -133,6 +146,8 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
             Additional agents to merge with built-in ones.
         permission_mode:
             SDK permission mode (default, acceptEdits, bypassPermissions).
+        model_override:
+            Override the default model (e.g. from the model router).
         """
         agents = get_agents(extra_agents)
 
@@ -145,20 +160,15 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
             "AskUserQuestion",
         ] + ZENKI_TOOL_NAMES
 
-        # Determine model from settings
-        model_map = {
-            "haiku": "haiku",
-            "sonnet": "sonnet",
-            "opus": "opus",
-        }
-        default_model = model_map.get(self.settings.llm.default_model, "sonnet")
+        # Use model override (from router) or fall back to settings default
+        model = model_override or self.settings.llm.default_model
 
         return ClaudeAgentOptions(
             system_prompt=self._system_prompt,
             allowed_tools=allowed_tools,
             permission_mode=permission_mode,
             cwd=str(cwd) if cwd else None,
-            model=default_model,
+            model=model,
             max_turns=max_turns,
             mcp_servers=self._mcp_servers,
             hooks=self._hooks,
@@ -168,7 +178,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         )
 
     # ------------------------------------------------------------------
-    # Public API: One-shot query
+    # Public API: One-shot query (low-level)
     # ------------------------------------------------------------------
 
     async def run_query(
@@ -177,6 +187,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         *,
         max_turns: int | None = None,
         cwd: str | Path | None = None,
+        model_override: str | None = None,
     ) -> str:
         """Run a one-shot query and return the final result.
 
@@ -190,13 +201,17 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
             Maximum agent loop iterations.
         cwd:
             Working directory for the agent.
+        model_override:
+            Override the default model for this query.
 
         Returns
         -------
         str
             The agent's final response text.
         """
-        options = self._build_options(max_turns=max_turns, cwd=cwd)
+        options = self._build_options(
+            max_turns=max_turns, cwd=cwd, model_override=model_override,
+        )
         result_text = ""
 
         async for message in query(prompt=prompt, options=options):
@@ -206,7 +221,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         return result_text or "Task completed."
 
     # ------------------------------------------------------------------
-    # Public API: Streaming query
+    # Public API: Streaming query (low-level)
     # ------------------------------------------------------------------
 
     async def run_query_streaming(
@@ -215,6 +230,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         *,
         max_turns: int | None = None,
         cwd: str | Path | None = None,
+        model_override: str | None = None,
     ) -> AsyncIterator[str]:
         """Run a query and yield response text chunks as they arrive.
 
@@ -226,13 +242,17 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
             Maximum agent loop iterations.
         cwd:
             Working directory for the agent.
+        model_override:
+            Override the default model for this query.
 
         Yields
         ------
         str
             Text chunks from the agent's response.
         """
-        options = self._build_options(max_turns=max_turns, cwd=cwd)
+        options = self._build_options(
+            max_turns=max_turns, cwd=cwd, model_override=model_override,
+        )
 
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage) and message.content:
@@ -264,6 +284,155 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         """
         options = self._build_options(max_turns=max_turns, cwd=cwd)
         return ZenkiConversation(options)
+
+    # ------------------------------------------------------------------
+    # Public API: Session-aware message processing (high-level)
+    # ------------------------------------------------------------------
+
+    async def process_message(
+        self,
+        message: str,
+        session_id: str | None = None,
+        user_id: str = "default",
+        channel_type: str = "cli",
+        channel_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Process an incoming user message and return the assistant's reply.
+
+        This is the primary API for channel adapters. It handles:
+        1. Session resolution/creation
+        2. Message persistence
+        3. Dynamic model routing based on message complexity
+        4. SDK delegation
+        5. Error handling with smart retry/escalation
+
+        Parameters
+        ----------
+        message:
+            The user's message text.
+        session_id:
+            Existing session to continue, or ``None`` to auto-resolve.
+        user_id:
+            The user identifier.
+        channel_type:
+            Channel type (``"cli"``, ``"slack"``, etc.).
+        channel_id:
+            Channel-specific identifier.
+        thread_id:
+            Thread within the channel.
+
+        Returns
+        -------
+        str
+            The assistant's response text.
+        """
+        # 1. Resolve session.
+        if session_id is not None:
+            session = self.session_manager.get_session(session_id)
+            if session is None:
+                session = self.session_manager.create_session(
+                    user_id=user_id,
+                    channel_type=channel_type,
+                    channel_id=channel_id,
+                    thread_id=thread_id,
+                )
+        else:
+            session = self.session_manager.get_or_create_session(
+                user_id=user_id,
+                channel_type=channel_type,
+                channel_id=channel_id,
+                thread_id=thread_id,
+            )
+
+        # 2. Store user message.
+        self.session_manager.add_message(
+            session_id=session.id,
+            role="user",
+            content=message,
+        )
+
+        # 3. Route to appropriate model and delegate to SDK.
+        model = self._router.classify_complexity(message)
+
+        try:
+            response_text = await self.run_query(message, model_override=model)
+        except Exception as exc:
+            logger.exception("SDK agent call failed")
+            result = await self.error_handler.handle(exc)
+            error_text = result.user_message or f"I encountered an error: {exc}"
+            self.session_manager.add_message(
+                session_id=session.id,
+                role="assistant",
+                content=error_text,
+            )
+            return error_text
+
+        # 4. Store assistant response.
+        self.session_manager.add_message(
+            session_id=session.id,
+            role="assistant",
+            content=response_text,
+        )
+
+        return response_text
+
+    async def process_message_streaming(
+        self,
+        message: str,
+        session_id: str | None = None,
+        user_id: str = "default",
+        channel_type: str = "cli",
+        channel_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Process a message and yield response chunks as they arrive.
+
+        Same as ``process_message`` but streams the response for real-time
+        display in chat interfaces.
+        """
+        # Resolve session
+        if session_id is not None:
+            session = self.session_manager.get_session(session_id)
+            if session is None:
+                session = self.session_manager.create_session(
+                    user_id=user_id,
+                    channel_type=channel_type,
+                    channel_id=channel_id,
+                    thread_id=thread_id,
+                )
+        else:
+            session = self.session_manager.get_or_create_session(
+                user_id=user_id,
+                channel_type=channel_type,
+                channel_id=channel_id,
+                thread_id=thread_id,
+            )
+
+        self.session_manager.add_message(
+            session_id=session.id,
+            role="user",
+            content=message,
+        )
+
+        model = self._router.classify_complexity(message)
+        full_response: list[str] = []
+
+        async for chunk in self.run_query_streaming(message, model_override=model):
+            full_response.append(chunk)
+            yield chunk
+
+        # Store the complete response
+        response_text = "\n".join(full_response) if full_response else "Done."
+        self.session_manager.add_message(
+            session_id=session.id,
+            role="assistant",
+            content=response_text,
+        )
+
+    async def close_session(self, session_id: str) -> None:
+        """Close an active session."""
+        self.session_manager.close_session(session_id)
 
 
 class ZenkiConversation:
@@ -300,18 +469,7 @@ class ZenkiConversation:
             self._client = None
 
     async def send(self, message: str) -> str:
-        """Send a message and return the response text.
-
-        Parameters
-        ----------
-        message:
-            The user's message.
-
-        Returns
-        -------
-        str
-            The agent's response text.
-        """
+        """Send a message and return the response text."""
         if self._client is None:
             raise RuntimeError("Conversation not started. Use 'async with' context manager.")
 
@@ -321,35 +479,21 @@ class ZenkiConversation:
         text_parts: list[str] = []
 
         async for msg in self._client.receive_response():
-            # Capture session ID from result messages
             if hasattr(msg, "session_id") and msg.session_id:
                 self._session_id = msg.session_id
 
-            # Collect text from assistant messages
             if isinstance(msg, AssistantMessage) and msg.content:
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         text_parts.append(block.text)
 
-            # Capture the final result
             if isinstance(msg, ResultMessage) and hasattr(msg, "result") and msg.result:
                 result_text = msg.result
 
         return result_text or "\n".join(text_parts) or "Done."
 
     async def send_streaming(self, message: str) -> AsyncIterator[str]:
-        """Send a message and yield response chunks as they arrive.
-
-        Parameters
-        ----------
-        message:
-            The user's message.
-
-        Yields
-        ------
-        str
-            Text chunks from the agent's response.
-        """
+        """Send a message and yield response chunks as they arrive."""
         if self._client is None:
             raise RuntimeError("Conversation not started. Use 'async with' context manager.")
 

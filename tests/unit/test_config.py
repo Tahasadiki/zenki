@@ -37,7 +37,6 @@ class TestDefaultConfig:
             "memory",
             "channels",
             "daemon",
-            "skills",
             "personality",
         }
         assert set(DEFAULT_CONFIG.keys()) == expected_keys
@@ -54,7 +53,6 @@ class TestDefaultConfig:
         assert llm["provider"] == "claude"
         assert llm["api_key_env"] == "ANTHROPIC_API_KEY"
         assert llm["default_model"] == "sonnet"
-        assert llm["smart_routing"] is True
         assert llm["models"]["haiku"] == "claude-haiku-4-5-20251001"
         assert llm["models"]["sonnet"] == "claude-sonnet-4-6"
         assert llm["models"]["opus"] == "claude-opus-4-6"
@@ -97,11 +95,6 @@ class TestDefaultConfig:
         assert d["port"] == 8420
         assert d["log_level"] == "INFO"
 
-    def test_default_skills(self) -> None:
-        s = DEFAULT_CONFIG["skills"]
-        assert s["auto_discover"] is True
-        assert s["require_approval"] is True
-
     def test_default_personality(self) -> None:
         p = DEFAULT_CONFIG["personality"]
         assert p["tone"] == "professional"
@@ -130,7 +123,6 @@ class TestZenkiSettingsDefaults:
     def test_default_llm(self) -> None:
         settings = ZenkiSettings()
         assert settings.llm.provider == "claude"
-        assert settings.llm.smart_routing is True
         assert settings.llm.models.sonnet == "claude-sonnet-4-6"
 
     def test_default_memory(self) -> None:
@@ -149,11 +141,6 @@ class TestZenkiSettingsDefaults:
         settings = ZenkiSettings()
         assert settings.daemon.port == 8420
         assert settings.daemon.log_level == "INFO"
-
-    def test_default_skills(self) -> None:
-        settings = ZenkiSettings()
-        assert settings.skills.auto_discover is True
-        assert settings.skills.require_approval is True
 
     def test_default_personality(self) -> None:
         settings = ZenkiSettings()
@@ -206,7 +193,6 @@ class TestLoadConfig:
         assert settings.llm.default_model == "haiku"
         # Unchanged nested defaults preserved
         assert settings.llm.provider == "claude"
-        assert settings.llm.smart_routing is True
         assert settings.personality.tone == "casual"
         assert settings.personality.verbosity == "balanced"
 
@@ -365,7 +351,6 @@ class TestConfigMerging:
         assert merged["llm"]["default_model"] == "opus"
         # Siblings unchanged
         assert merged["llm"]["provider"] == "claude"
-        assert merged["llm"]["smart_routing"] is True
         assert merged["llm"]["models"] == DEFAULT_CONFIG["llm"]["models"]
 
     def test_deeply_nested_override(self) -> None:
@@ -383,15 +368,15 @@ class TestConfigMerging:
         overrides = {
             "version": "3.0.0",
             "daemon": {"port": 5555, "log_level": "DEBUG"},
-            "skills": {"require_approval": False},
+            "personality": {"tone": "casual"},
         }
         merged = ZenkiSettings.merge_with_defaults(overrides)
         assert merged["version"] == "3.0.0"
         assert merged["daemon"]["port"] == 5555
         assert merged["daemon"]["log_level"] == "DEBUG"
         assert merged["daemon"]["host"] == "0.0.0.0"  # default preserved
-        assert merged["skills"]["require_approval"] is False
-        assert merged["skills"]["auto_discover"] is True  # default preserved
+        assert merged["personality"]["tone"] == "casual"
+        assert merged["personality"]["verbosity"] == "balanced"  # default preserved
 
     def test_merge_does_not_mutate_defaults(self) -> None:
         """Merging should not modify the original DEFAULT_CONFIG."""

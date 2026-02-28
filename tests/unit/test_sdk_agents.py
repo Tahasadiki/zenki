@@ -6,8 +6,6 @@ contain the required fields for the Claude Agent SDK.
 
 from __future__ import annotations
 
-import pytest
-
 from zenki.sdk.agents import (
     ZENKI_AGENTS,
     create_agent,

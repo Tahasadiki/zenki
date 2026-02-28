@@ -185,10 +185,42 @@ class MemoryManager:
         self.semantic.store(content=content, category=category, tags=tags)
 
     def update_core_memory(self, key: str, content: str) -> None:
-        """Update a core-memory file.
+        """Update a core-memory file (full replacement).
 
         Args:
             key: The core memory key (e.g. ``"identity"``).
             content: The new content.
         """
         self.core.update(key, content)
+
+    # ------------------------------------------------------------------
+    # SDK tool interface methods
+    # ------------------------------------------------------------------
+
+    def read_core_section(self, section: str) -> str:
+        """Read a core memory section by key.
+
+        Args:
+            section: The section key (e.g. ``"identity"``, ``"preferences"``),
+                or ``"all"`` to return all sections combined.
+
+        Returns:
+            The section content as a string.
+        """
+        if section == "all":
+            return self.core.get_context_string()
+        return self.core.get(section)
+
+    def update_core_section(self, section: str, content: str, mode: str = "replace") -> None:
+        """Update a core memory section with append or replace semantics.
+
+        Args:
+            section: The section key (e.g. ``"preferences"``).
+            content: The new content to write or append.
+            mode: ``"append"`` to add to existing content, or
+                ``"replace"`` to overwrite entirely.
+        """
+        if mode == "append":
+            existing = self.core.get(section)
+            content = (existing + "\n" + content) if existing.strip() else content
+        self.core.update(section, content)

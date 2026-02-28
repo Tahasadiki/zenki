@@ -1,9 +1,7 @@
-"""Zenki core — agent orchestrator and session management."""
+"""Zenki core — session management, error handling, and prompt building."""
 
-from zenki.core.agent import ZenkiAgent
 from zenki.core.session import SessionManager
 
 __all__ = [
     "SessionManager",
-    "ZenkiAgent",
 ]

@@ -19,7 +19,6 @@ from typing import Literal
 
 from claude_agent_sdk import AgentDefinition
 
-
 # ---------------------------------------------------------------------------
 # Agent prompt templates
 # ---------------------------------------------------------------------------

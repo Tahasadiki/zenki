@@ -10,7 +10,6 @@ DEFAULT_CONFIG: dict = {
         "provider": "claude",
         "api_key_env": "ANTHROPIC_API_KEY",
         "default_model": "sonnet",
-        "smart_routing": True,
         "models": {
             "haiku": "claude-haiku-4-5-20251001",
             "sonnet": "claude-sonnet-4-6",
@@ -52,10 +51,6 @@ DEFAULT_CONFIG: dict = {
         "host": "0.0.0.0",
         "port": 8420,
         "log_level": "INFO",
-    },
-    "skills": {
-        "auto_discover": True,
-        "require_approval": True,
     },
     "personality": {
         "tone": "professional",

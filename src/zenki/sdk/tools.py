@@ -11,9 +11,7 @@ Reference: docs/claude-agent-sdk/custom-tools.md
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -44,7 +42,8 @@ async def memory_search(args: dict[str, Any]) -> dict[str, Any]:
     if db is None:
         return {"content": [{"type": "text", "text": "Memory system not initialized."}]}
 
-    memories = db.search_semantic_memories(query=query, category=category, limit=limit)
+    memories = db.search_semantic_memories(query=query, category=category or None)
+    memories = memories[:limit]
     if not memories:
         return {"content": [{"type": "text", "text": f"No memories found for: {query}"}]}
 
@@ -80,12 +79,15 @@ async def memory_store(args: dict[str, Any]) -> dict[str, Any]:
     tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
     importance = min(1.0, max(0.0, args.get("importance", 0.5)))
 
-    db.store_semantic_memory(
+    from zenki.db.models import SemanticMemory
+
+    memory = SemanticMemory(
         content=args["content"],
         category=args.get("category", "knowledge"),
         tags=tags,
         importance=importance,
     )
+    db.create_semantic_memory(memory)
 
     return {
         "content": [
@@ -115,7 +117,7 @@ async def memory_read_core(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "memory_update_core",
-    "Update a section of Zenki's core memory (identity, preferences, projects, relationships, patterns)",
+    "Update a section of Zenki's core memory (identity, preferences, projects, etc.)",
     {"section": str, "content": str, "mode": str},
 )
 async def memory_update_core(args: dict[str, Any]) -> dict[str, Any]:
@@ -170,7 +172,10 @@ async def schedule_task(args: dict[str, Any]) -> dict[str, Any]:
         "content": [
             {
                 "type": "text",
-                "text": f"Scheduled task '{args['description']}' (ID: {task_id}, schedule: {args['schedule']})",
+                "text": (
+                    f"Scheduled task '{args['description']}' "
+                    f"(ID: {task_id}, schedule: {args['schedule']})"
+                ),
             }
         ]
     }
@@ -223,10 +228,17 @@ async def send_notification(args: dict[str, Any]) -> dict[str, Any]:
     channel = args.get("channel", "default")
     urgency = args.get("urgency", "normal")
 
+    from zenki.channels.message import Notification
+
+    notification = Notification(
+        content=args["message"],
+        priority=urgency,
+        source="zenki-tool",
+    )
     await registry.send_notification(
-        message=args["message"],
-        channel=channel,
-        urgency=urgency,
+        notification=notification,
+        user_id="default",
+        channel_type=channel if channel != "default" else None,
     )
 
     return {
@@ -256,7 +268,8 @@ async def get_session_history(args: dict[str, Any]) -> dict[str, Any]:
     session_id = args.get("session_id", "")
     limit = args.get("limit", 10)
 
-    messages = db.get_messages(session_id=session_id, limit=limit)
+    messages = db.get_messages_for_session(session_id=session_id)
+    messages = messages[-limit:]  # Most recent messages
     if not messages:
         return {"content": [{"type": "text", "text": "No messages found for this session."}]}
 

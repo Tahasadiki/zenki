@@ -11,9 +11,7 @@ Reference: docs/claude-agent-sdk/hooks.md
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from claude_agent_sdk import HookMatcher
@@ -85,7 +83,6 @@ async def block_dangerous_paths(
         return {}
 
     file_path = input_data.get("tool_input", {}).get("file_path", "")
-    command = input_data.get("tool_input", {}).get("command", "")
 
     protected_dirs = ["/etc/", "/sys/", "/proc/", "/root/.ssh", "/root/.aws"]
 
@@ -162,7 +159,6 @@ async def audit_tool_usage(
     tool_name = input_data.get("tool_name", "unknown")
     event = input_data.get("hook_event_name", "unknown")
     session_id = input_data.get("session_id", "unknown")
-    timestamp = datetime.now(timezone.utc).isoformat()
 
     logger.info(
         "AUDIT | %s | tool=%s | session=%s | tool_use_id=%s",
