@@ -91,6 +91,122 @@
 
 ---
 
+## 3.1 Claude Agent SDK Integration (SDK-Native Architecture)
+
+Zenki uses the **Claude Agent SDK** (`claude-agent-sdk` PyPI package) as its core
+engine. Instead of implementing a custom LLM tool loop, Zenki delegates to the SDK's
+native agent orchestration, which provides:
+
+- **Built-in tool execution** (Read, Write, Edit, Bash, Glob, Grep, WebSearch, etc.)
+- **Subagent delegation** via `AgentDefinition` (replaces custom skill-based agents)
+- **Custom MCP tools** via `@tool` + `create_sdk_mcp_server()` (memory, scheduling, etc.)
+- **Lifecycle hooks** via `HookMatcher` (security, audit, memory integration)
+- **Skills** via filesystem `.claude/skills/SKILL.md` files (auto-discovered)
+- **Multi-turn conversations** via `ClaudeSDKClient`
+
+### Architecture Diagram (SDK-Native)
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         ZENKI DAEMON                              │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │                   Channel Router / Registry                 │  │
+│  │           (Slack webhook, CLI stdin/stdout, etc.)          │  │
+│  └───────────────────────┬────────────────────────────────────┘  │
+│                          │                                        │
+│  ┌───────────────────────▼────────────────────────────────────┐  │
+│  │               ZenkiAgent (High-Level API)                   │  │
+│  │    ├─ Session management (Zenki DB)                        │  │
+│  │    ├─ Error handling + smart escalation                    │  │
+│  │    └─ Delegates to SDK Orchestrator ↓                      │  │
+│  └───────────────────────┬────────────────────────────────────┘  │
+│                          │                                        │
+│  ┌───────────────────────▼────────────────────────────────────┐  │
+│  │          ZenkiOrchestrator (SDK-Native)                     │  │
+│  │    ├─ ClaudeSDKClient / query() for LLM interaction        │  │
+│  │    ├─ AgentDefinition registry (subagents) ───────────┐    │  │
+│  │    ├─ Custom MCP tools (@tool + create_sdk_mcp_server) │   │  │
+│  │    ├─ Hooks (HookMatcher callbacks) ──────────────────┘    │  │
+│  │    └─ Skills (.claude/skills/ via setting_sources)         │  │
+│  └──┬──────────┬───────────┬──────────────┬───────────────────┘  │
+│     │          │           │              │                       │
+│  ┌──▼───┐  ┌──▼────┐  ┌───▼──────┐  ┌───▼────────┐             │
+│  │Memory│  │Agents │  │MCP Tools │  │  Hooks     │             │
+│  │System│  │       │  │          │  │            │             │
+│  │(4-T) │  │SW Eng │  │memory_*  │  │Security   │             │
+│  │      │  │WebRes │  │schedule_*│  │Audit      │             │
+│  │Work  │  │CodeRev│  │notify_*  │  │Memory Int │             │
+│  │Core  │  │TestEng│  │session_* │  │Subagent   │             │
+│  │Epis  │  │SysOps │  │          │  │Notif      │             │
+│  │Sem   │  │       │  │          │  │           │             │
+│  └──┬───┘  └───────┘  └──────────┘  └───────────┘             │
+│     │                                                           │
+│  ┌──▼──────────────────────────────────────────────────────┐   │
+│  │    SQLite + sqlite-vec + Scheduler + Channels            │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Key SDK Components
+
+#### Agents (Subagents) — `src/zenki/sdk/agents.py`
+
+Specialist roles are defined as `AgentDefinition` instances, NOT as SKILL.md files.
+Each agent has a description (for auto-delegation), system prompt, tool restrictions,
+and optional model override.
+
+| Agent | Model | Tools | Purpose |
+|-------|-------|-------|---------|
+| `software-engineer` | sonnet | Read, Write, Edit, Bash, Glob, Grep | Code, PRs, architecture |
+| `web-researcher` | haiku | WebSearch, WebFetch, Read | Research, docs, APIs |
+| `code-reviewer` | sonnet | Read, Grep, Glob (read-only) | Security, quality reviews |
+| `test-engineer` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Tests, coverage |
+| `system-ops` | haiku | Bash, Read, Glob, Grep | System admin, Docker, ops |
+
+Claude auto-delegates to the right agent based on the task, or the user can
+request one explicitly: "Use the code-reviewer agent to review auth.py".
+
+#### Custom MCP Tools — `src/zenki/sdk/tools.py`
+
+Zenki-specific operations exposed as custom MCP tools via `@tool` decorator:
+
+| Tool | MCP Name | Purpose |
+|------|----------|---------|
+| `memory_search` | `mcp__zenki__memory_search` | Search semantic memory |
+| `memory_store` | `mcp__zenki__memory_store` | Store new memories |
+| `memory_read_core` | `mcp__zenki__memory_read_core` | Read core memory sections |
+| `memory_update_core` | `mcp__zenki__memory_update_core` | Update core memory |
+| `schedule_task` | `mcp__zenki__schedule_task` | Create scheduled tasks |
+| `list_scheduled_tasks` | `mcp__zenki__list_scheduled_tasks` | List tasks |
+| `send_notification` | `mcp__zenki__send_notification` | Send notifications |
+| `get_session_history` | `mcp__zenki__get_session_history` | Get conversation history |
+
+#### Hooks — `src/zenki/sdk/hooks.py`
+
+| Hook | Event | Matcher | Purpose |
+|------|-------|---------|---------|
+| `protect_sensitive_files` | PreToolUse | `Write\|Edit` | Block .env, credentials |
+| `block_dangerous_paths` | PreToolUse | `Write\|Edit` | Block /etc, /sys writes |
+| `check_dangerous_commands` | PreToolUse | `Bash` | Block rm -rf /, fork bombs |
+| `audit_tool_usage` | Pre+PostToolUse | (all) | Log all tool calls |
+| `capture_conversation_insights` | PostToolUse | (all) | Memory integration |
+| `track_subagent_lifecycle` | SubagentStart/Stop | (all) | Monitor subagents |
+| `forward_notifications` | Notification | (all) | Forward to channels |
+
+#### Skills — `.claude/skills/` (filesystem)
+
+Skills that remain as filesystem SKILL.md files are those that represent
+reusable instructions Claude invokes autonomously (not agent personas):
+
+- Custom workflow templates
+- User-defined learned skills (generated by consolidation)
+- Project-specific conventions
+
+Skills are auto-discovered when `setting_sources=["user", "project"]` is set.
+
+---
+
 ## 4. Project Structure
 
 ### 4.1 Source Code (ships with Zenki via pip/pipx)
@@ -129,6 +245,14 @@ zenki/
 │       │       ├── chat_view.py      # Rich chat interface
 │       │       ├── status_view.py    # Daemon status display
 │       │       └── setup_wizard.py   # Interactive setup wizard
+│       │
+│       ├── sdk/                      # Claude Agent SDK integration (NEW)
+│       │   ├── __init__.py           # Package exports
+│       │   ├── agents.py             # AgentDefinition registry (subagents)
+│       │   ├── tools.py              # Custom MCP tools (@tool + MCP server)
+│       │   ├── hooks.py              # Lifecycle hooks (security, audit, memory)
+│       │   ├── orchestrator.py       # ZenkiOrchestrator (ClaudeSDKClient wrapper)
+│       │   └── _context.py           # Service registry for tool DI
 │       │
 │       ├── core/                     # Core agent logic
 │       │   ├── __init__.py
