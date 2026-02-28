@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -318,3 +319,98 @@ class TestListActiveSessions:
 
         all_active = sm.list_active_sessions()
         assert len(all_active) == 2
+
+
+# ===========================================================================
+# Stale session auto-expiry
+# ===========================================================================
+
+
+class TestCloseStaleSession:
+    """Tests for SessionManager.close_stale_sessions."""
+
+    def test_stale_session_is_closed(
+        self, sm: SessionManager, user: User, db: ZenkiDatabase
+    ) -> None:
+        session = sm.create_session(user_id=user.id, channel_type="cli")
+        # Backdate last_active to 2 hours ago
+        session.last_active = datetime.now(UTC) - timedelta(hours=2)
+        db.update_session(session)
+
+        closed = sm.close_stale_sessions(timeout_minutes=60)
+        assert len(closed) == 1
+        assert closed[0].id == session.id
+
+        updated = db.get_session(session.id)
+        assert updated is not None
+        assert updated.ended_at is not None
+
+    def test_recent_session_is_preserved(
+        self, sm: SessionManager, user: User, db: ZenkiDatabase
+    ) -> None:
+        session = sm.create_session(user_id=user.id, channel_type="cli")
+        # Set last_active to 5 minutes ago (within default timeout)
+        session.last_active = datetime.now(UTC) - timedelta(minutes=5)
+        db.update_session(session)
+
+        closed = sm.close_stale_sessions(timeout_minutes=60)
+        assert len(closed) == 0
+
+        updated = db.get_session(session.id)
+        assert updated is not None
+        assert updated.ended_at is None
+
+    def test_already_closed_session_not_touched(
+        self, sm: SessionManager, user: User, db: ZenkiDatabase
+    ) -> None:
+        session = sm.create_session(user_id=user.id, channel_type="cli")
+        sm.close_session(session.id, summary="Manually closed")
+
+        closed = sm.close_stale_sessions(timeout_minutes=1)
+        assert len(closed) == 0
+
+    def test_started_at_fallback_when_last_active_is_none(
+        self, sm: SessionManager, user: User, db: ZenkiDatabase
+    ) -> None:
+        session = sm.create_session(user_id=user.id, channel_type="cli")
+        # Backdate started_at, leave last_active as None
+        session.started_at = datetime.now(UTC) - timedelta(hours=3)
+        session.last_active = None
+        db.update_session(session)
+
+        closed = sm.close_stale_sessions(timeout_minutes=60)
+        assert len(closed) == 1
+
+    def test_user_id_filtering(
+        self, sm: SessionManager, db: ZenkiDatabase
+    ) -> None:
+        u1 = db.create_user(User(display_name="U1"))
+        u2 = db.create_user(User(display_name="U2"))
+
+        s1 = sm.create_session(user_id=u1.id, channel_type="cli")
+        s2 = sm.create_session(user_id=u2.id, channel_type="cli")
+
+        # Backdate both
+        s1.last_active = datetime.now(UTC) - timedelta(hours=2)
+        s2.last_active = datetime.now(UTC) - timedelta(hours=2)
+        db.update_session(s1)
+        db.update_session(s2)
+
+        # Only close u1's stale sessions
+        closed = sm.close_stale_sessions(timeout_minutes=60, user_id=u1.id)
+        assert len(closed) == 1
+        assert closed[0].id == s1.id
+
+        # u2's session should still be active
+        assert db.get_session(s2.id).ended_at is None
+
+    def test_stale_summary_text(
+        self, sm: SessionManager, user: User, db: ZenkiDatabase
+    ) -> None:
+        session = sm.create_session(user_id=user.id, channel_type="cli")
+        session.last_active = datetime.now(UTC) - timedelta(hours=2)
+        db.update_session(session)
+
+        sm.close_stale_sessions(timeout_minutes=60)
+        updated = db.get_session(session.id)
+        assert updated.summary == "Auto-closed due to inactivity"

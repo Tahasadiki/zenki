@@ -83,6 +83,9 @@ class ZenkiOrchestrator:
         self.error_handler = SmartErrorHandler()
         self._router = ModelRouter()
 
+        # Keep a direct reference for memory-aware prompts
+        self._memory_manager = memory_manager
+
         # Register services so custom tools can access them
         _context.set_database(db)
         if memory_manager:
@@ -96,16 +99,59 @@ class ZenkiOrchestrator:
         self._agents = get_agents()
         self._mcp_servers = create_zenki_tools()
         self._hooks = create_zenki_hooks()
-        self._system_prompt = self._build_system_prompt()
 
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(self) -> str:
-        """Build the Zenki system prompt from settings and memory."""
+    def _build_system_prompt(
+        self,
+        query: str | None = None,
+        conversation_history: str | None = None,
+    ) -> str:
+        """Build the Zenki system prompt from settings, memory, and history.
+
+        Parameters
+        ----------
+        query:
+            The current user message. When provided (and a memory manager is
+            available), relevant memories are retrieved and injected into
+            the prompt.
+        conversation_history:
+            Formatted prior conversation to include for session resumption.
+        """
         personality = self.settings.personality.model_dump()
-        base_prompt = build_system_prompt(personality=personality)
+
+        core_memory: dict[str, str] | None = None
+        retrieved_memories: dict[str, str] | None = None
+
+        if self._memory_manager and query:
+            try:
+                core_memory = self._memory_manager.core.load_all()
+
+                context = self._memory_manager.build_context(query)
+
+                episodic_lines = [
+                    f"- {entry['summary']} (topics: {', '.join(entry.get('topics', []))})"
+                    for entry in context.get("episodic", [])
+                ]
+                semantic_lines = [
+                    f"- [{entry['category']}] {entry['content']} (tags: {', '.join(entry.get('tags', []))})"
+                    for entry in context.get("semantic", [])
+                ]
+                retrieved_memories = {
+                    "episodic": "\n".join(episodic_lines) if episodic_lines else "",
+                    "semantic": "\n".join(semantic_lines) if semantic_lines else "",
+                }
+            except Exception:
+                logger.warning("Memory retrieval failed; proceeding without memory context", exc_info=True)
+
+        base_prompt = build_system_prompt(
+            personality=personality,
+            core_memory=core_memory,
+            retrieved_memories=retrieved_memories,
+            conversation_history=conversation_history,
+        )
 
         # Append Zenki-specific context about available agents and tools
         agent_descriptions = "\n".join(
@@ -133,6 +179,8 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         extra_agents: dict[str, AgentDefinition] | None = None,
         permission_mode: str = "acceptEdits",
         model_override: str | None = None,
+        query: str | None = None,
+        conversation_history: str | None = None,
     ) -> ClaudeAgentOptions:
         """Build ``ClaudeAgentOptions`` with all Zenki components wired in.
 
@@ -148,6 +196,10 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
             SDK permission mode (default, acceptEdits, bypassPermissions).
         model_override:
             Override the default model (e.g. from the model router).
+        query:
+            The current user message for memory-aware prompt building.
+        conversation_history:
+            Formatted prior conversation for session resumption.
         """
         agents = get_agents(extra_agents)
 
@@ -163,8 +215,13 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         # Use model override (from router) or fall back to settings default
         model = model_override or self.settings.llm.default_model
 
+        system_prompt = self._build_system_prompt(
+            query=query,
+            conversation_history=conversation_history,
+        )
+
         return ClaudeAgentOptions(
-            system_prompt=self._system_prompt,
+            system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             permission_mode=permission_mode,
             cwd=str(cwd) if cwd else None,
@@ -211,6 +268,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         """
         options = self._build_options(
             max_turns=max_turns, cwd=cwd, model_override=model_override,
+            query=prompt,
         )
         result_text = ""
 
@@ -252,6 +310,7 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         """
         options = self._build_options(
             max_turns=max_turns, cwd=cwd, model_override=model_override,
+            query=prompt,
         )
 
         async for message in query(prompt=prompt, options=options):
@@ -269,6 +328,8 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
         *,
         max_turns: int | None = None,
         cwd: str | Path | None = None,
+        initial_query: str | None = None,
+        conversation_history: str | None = None,
     ) -> ZenkiConversation:
         """Create a new multi-turn conversation.
 
@@ -281,8 +342,17 @@ and notifications. These are available as MCP tools with the `mcp__zenki__` pref
             Maximum agent loop iterations per query.
         cwd:
             Working directory for the agent.
+        initial_query:
+            Used for memory retrieval in the initial system prompt.
+        conversation_history:
+            Formatted prior conversation for session resumption.
         """
-        options = self._build_options(max_turns=max_turns, cwd=cwd)
+        options = self._build_options(
+            max_turns=max_turns,
+            cwd=cwd,
+            query=initial_query,
+            conversation_history=conversation_history,
+        )
         return ZenkiConversation(options)
 
     # ------------------------------------------------------------------

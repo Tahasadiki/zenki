@@ -35,6 +35,7 @@ class TestDefaultConfig:
             "user",
             "llm",
             "memory",
+            "session",
             "channels",
             "daemon",
             "personality",

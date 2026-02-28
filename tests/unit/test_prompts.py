@@ -2,6 +2,7 @@
 
 from zenki.core.prompts import (
     CONSOLIDATION_PROMPT,
+    CONVERSATION_HISTORY_TEMPLATE,
     FACT_EXTRACTION_PROMPT,
     PERSONALITY_TEMPLATE,
     SESSION_SUMMARY_PROMPT,
@@ -73,6 +74,21 @@ class TestBuildSystemPrompt:
     def test_empty_retrieved_memory_omitted(self):
         prompt = build_system_prompt(personality={"tone": "casual"})
         assert "Relevant Context" not in prompt
+
+    def test_with_conversation_history(self):
+        personality = {"tone": "professional"}
+        history = "**User**: Hello\n**Zenki**: Hi there!"
+        prompt = build_system_prompt(
+            personality=personality,
+            conversation_history=history,
+        )
+        assert "Previous Conversation" in prompt
+        assert "Hello" in prompt
+        assert "Hi there!" in prompt
+
+    def test_no_conversation_history_when_none(self):
+        prompt = build_system_prompt(personality={"tone": "casual"})
+        assert "Previous Conversation" not in prompt
 
 
 

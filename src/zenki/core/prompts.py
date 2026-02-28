@@ -50,6 +50,13 @@ RETRIEVED_MEMORY_TEMPLATE = """\
 {semantic_memories}
 """
 
+CONVERSATION_HISTORY_TEMPLATE = """\
+## Previous Conversation (Session Resumed)
+The following is the prior conversation from this session:
+
+{history}
+"""
+
 CONSOLIDATION_PROMPT = """\
 You are reviewing recent conversations to extract and consolidate knowledge.
 
@@ -127,6 +134,7 @@ def build_system_prompt(
     personality: dict[str, str],
     core_memory: dict[str, str] | None = None,
     retrieved_memories: dict[str, str] | None = None,
+    conversation_history: str | None = None,
 ) -> str:
     """Build the full system prompt from components."""
     personality_block = PERSONALITY_TEMPLATE.format(
@@ -153,7 +161,7 @@ def build_system_prompt(
             semantic_memories=retrieved_memories.get("semantic", ""),
         )
 
-    return SYSTEM_PROMPT_TEMPLATE.format(
+    prompt = SYSTEM_PROMPT_TEMPLATE.format(
         personality_block=personality_block,
         core_memory_block=core_memory_block,
         retrieved_memory_block=retrieved_memory_block,
@@ -162,3 +170,10 @@ def build_system_prompt(
         proactivity=personality.get("proactivity", "moderate"),
         custom_instructions=personality.get("custom_instructions", ""),
     )
+
+    if conversation_history:
+        prompt += "\n" + CONVERSATION_HISTORY_TEMPLATE.format(
+            history=conversation_history,
+        )
+
+    return prompt

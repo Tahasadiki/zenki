@@ -103,6 +103,12 @@ class ChannelConfig(BaseModel):
     slack: SlackConfig = Field(default_factory=SlackConfig)
 
 
+class SessionConfig(BaseModel):
+    """Session lifecycle configuration."""
+
+    timeout_minutes: int = Field(default=60, ge=1)
+
+
 class DaemonConfig(BaseModel):
     """Daemon server configuration."""
 
@@ -163,6 +169,7 @@ class ZenkiSettings(BaseModel):
     user: UserConfig = Field(default_factory=UserConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    session: SessionConfig = Field(default_factory=SessionConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)

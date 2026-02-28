@@ -39,6 +39,9 @@ DEFAULT_CONFIG: dict = {
             "working_pct": 60,
         },
     },
+    "session": {
+        "timeout_minutes": 60,
+    },
     "channels": {
         "default_notification_channel": "cli",
         "slack": {

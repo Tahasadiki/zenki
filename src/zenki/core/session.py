@@ -6,7 +6,7 @@ to create, retrieve, and manage conversation sessions and their messages.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from zenki.db.database import ZenkiDatabase
 from zenki.db.models import Message, Session, User
@@ -169,3 +169,28 @@ class SessionManager:
         """
         sessions = self._db.list_sessions(user_id=user_id)
         return [s for s in sessions if s.ended_at is None]
+
+    def close_stale_sessions(
+        self,
+        timeout_minutes: int = 60,
+        user_id: str | None = None,
+    ) -> list[Session]:
+        """Close sessions that have been inactive longer than *timeout_minutes*.
+
+        Uses ``last_active`` (falling back to ``started_at``) to determine
+        staleness.  Returns the list of sessions that were closed.
+        """
+        cutoff = datetime.now(UTC) - timedelta(minutes=timeout_minutes)
+        active = self.list_active_sessions(user_id=user_id)
+        closed: list[Session] = []
+
+        for session in active:
+            last_activity = session.last_active or session.started_at
+            if last_activity < cutoff:
+                self.close_session(
+                    session.id,
+                    summary="Auto-closed due to inactivity",
+                )
+                closed.append(session)
+
+        return closed
