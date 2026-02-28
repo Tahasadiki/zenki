@@ -8,7 +8,7 @@ handling end-to-end.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -238,3 +238,95 @@ class TestCloseSession:
         closed = db.get_session(session.id)
         assert closed is not None
         assert closed.ended_at is not None
+
+
+# ===========================================================================
+# Memory-aware prompts
+# ===========================================================================
+
+
+class TestMemoryAwarePrompts:
+    """Tests that memory is wired into the system prompt."""
+
+    @pytest.fixture()
+    def memory_manager(self) -> MagicMock:
+        """Return a mock MemoryManager."""
+        mm = MagicMock()
+        mm.core.load_all.return_value = {
+            "identity": "Name: Alice",
+            "preferences": "Prefers Python",
+            "projects": "",
+            "relationships": "",
+            "patterns": "",
+        }
+        mm.build_context.return_value = {
+            "working": "",
+            "core": "",
+            "episodic": [
+                {"summary": "Discussed API design", "score": 0.8, "topics": ["API"]},
+            ],
+            "semantic": [
+                {
+                    "content": "User prefers REST over GraphQL",
+                    "category": "preference",
+                    "score": 0.9,
+                    "tags": ["api", "rest"],
+                },
+            ],
+        }
+        return mm
+
+    @pytest.fixture()
+    def orchestrator_with_memory(
+        self, settings: ZenkiSettings, db: ZenkiDatabase, memory_manager: MagicMock
+    ) -> ZenkiOrchestrator:
+        with patch("zenki.sdk.orchestrator.get_agents", return_value={}), \
+             patch("zenki.sdk.orchestrator.create_zenki_tools", return_value={}), \
+             patch("zenki.sdk.orchestrator.create_zenki_hooks", return_value={}):
+            orch = ZenkiOrchestrator(
+                settings=settings, db=db, memory_manager=memory_manager
+            )
+        orch.run_query = AsyncMock(return_value="Mock response")
+        return orch
+
+    def test_build_context_called_when_query_provided(
+        self, orchestrator_with_memory: ZenkiOrchestrator, memory_manager: MagicMock
+    ) -> None:
+        orchestrator_with_memory._build_system_prompt(query="Tell me about APIs")
+        memory_manager.build_context.assert_called_once_with("Tell me about APIs")
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_contains_core_memory(
+        self, orchestrator_with_memory: ZenkiOrchestrator
+    ) -> None:
+        prompt = orchestrator_with_memory._build_system_prompt(query="test")
+        assert "Alice" in prompt
+        assert "Python" in prompt
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_contains_retrieved_memories(
+        self, orchestrator_with_memory: ZenkiOrchestrator
+    ) -> None:
+        prompt = orchestrator_with_memory._build_system_prompt(query="test")
+        assert "Discussed API design" in prompt
+        assert "REST over GraphQL" in prompt
+
+    def test_graceful_degradation_on_memory_error(
+        self, orchestrator_with_memory: ZenkiOrchestrator, memory_manager: MagicMock
+    ) -> None:
+        memory_manager.core.load_all.side_effect = RuntimeError("Memory failure")
+        # Should not raise; falls back to prompt without memory
+        prompt = orchestrator_with_memory._build_system_prompt(query="test")
+        assert "Zenki" in prompt
+
+    def test_no_memory_when_no_query(
+        self, orchestrator_with_memory: ZenkiOrchestrator, memory_manager: MagicMock
+    ) -> None:
+        orchestrator_with_memory._build_system_prompt(query=None)
+        memory_manager.build_context.assert_not_called()
+
+    def test_no_memory_when_no_manager(
+        self, orchestrator: ZenkiOrchestrator
+    ) -> None:
+        prompt = orchestrator._build_system_prompt(query="test")
+        assert "Zenki" in prompt
